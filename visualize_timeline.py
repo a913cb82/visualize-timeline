@@ -9,13 +9,15 @@ try:
     import geopandas as gpd
     from shapely.geometry import Point, LineString
     import folium
+    import xyzservices.providers as xyz # Import xyzservices
 except ImportError as e:
     print(f"ERROR: Required libraries for interactive mapping are missing: {e}")
-    print("Please install geopandas and folium: pip install geopandas folium")
+    print("Please install geopandas, folium, and xyzservices: pip install geopandas folium xyzservices")
     sys.exit(1)
 
 # --- Constants ---
 API_KEY_FILENAME = "stadia_api_key.txt"
+GOOGLE_MAPS_API_KEY_FILENAME = "google_maps_api_key.txt"  # New constant for Google Maps API key file
 # No fading/slider constants needed
 
 # --- Functions (load_csv, filter_locations) ---
@@ -92,7 +94,8 @@ def create_interactive_map(
     add_start_end_markers: bool = True,
     add_all_points: bool = False,
     line_color: str = 'blue',
-    line_weight: int = 3
+    line_weight: int = 3,
+    google_maps_api_key: str | None = None # Add google maps api key
 ):
     """
     Creates a simple interactive HTML map with a solid path line.
@@ -131,6 +134,68 @@ def create_interactive_map(
         except Exception as e_stadia: print(f"*** Warning: Could not add Stadia Stamen Terrain layer: {e_stadia}")
     else: print("No Stadia API key provided. Skipping Stadia basemap.")
 
+    # --- Add Google Maps Tile Layer ---
+    if google_maps_api_key:
+        print("Attempting to add Google Maps tile layer...")
+        try:
+            # Google Maps Standard
+            google_maps_tile_url = f"https://mt1.google.com/vt/lyrs=m&x={{x}}&y={{y}}&z={{z}}&key={google_maps_api_key}"
+            folium.TileLayer(
+                tiles=google_maps_tile_url,
+                attr="Google Maps",
+                name="Google Maps",
+                overlay=False,
+                control=True,
+                show=False,
+            ).add_to(m)
+            print("Google Maps tile layer added as an option.")
+            # Google Maps Terrain
+            google_maps_terrain_tile_url = f"https://mt1.google.com/vt/lyrs=p&x={{x}}&y={{y}}&z={{z}}&key={google_maps_api_key}"
+            folium.TileLayer(
+                tiles=google_maps_terrain_tile_url,
+                attr="Google Maps Terrain",
+                name="Google Maps Terrain",
+                overlay=False,
+                control=True,
+                show=False,
+            ).add_to(m)
+            print("Google Maps Terrain tile layer added as an option.")
+            # Google Maps Hybrid
+            google_maps_hybrid_tile_url = f"https://mt1.google.com/vt/lyrs=y&x={{x}}&y={{y}}&z={{z}}&key={google_maps_api_key}"
+            folium.TileLayer(
+                tiles=google_maps_hybrid_tile_url,
+                attr="Google Maps Hybrid",
+                name="Google Maps Hybrid",
+                overlay=False,
+                control=True,
+                show=False,
+            ).add_to(m)
+            print("Google Maps Hybrid tile layer added as an option.")
+        except Exception as e_google:
+            print(f"*** Warning: Could not add Google Maps tile layer: {e_google}")
+    else:
+        print("No Google Maps API key provided. Skipping Google Maps basemap.")
+
+    # --- Add Free Satellite Layer ---
+    folium.TileLayer(
+        tiles=xyz.Esri.WorldImagery.build_url(),
+        attr="Esri World Imagery",
+        name="Esri World Imagery",
+        overlay=False,
+        control=True,
+        show=False,
+    ).add_to(m)
+    print("Added Esri World Imagery satellite layer.")
+
+    esri_ref_url = 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
+    folium.TileLayer(
+        tiles=esri_ref_url,
+        attr='Esri & contributors',
+        name='Labels & Boundaries (Esri)', # Give it a descriptive name
+        overlay=True,
+        control=True,
+        show=False,
+    ).add_to(m)
 
     # --- Add Data: Single Solid Polyline ---
     if len(gdf_wgs84) >= 2:
@@ -194,6 +259,25 @@ def create_interactive_map(
     except Exception as e:
         print(f"Error saving map HTML: {e}")
 
+def read_api_key_from_file(filename: str) -> str | None:
+    """Reads an API key from a file."""
+    if os.path.exists(filename):
+        print(f"Attempting to read API key from '{filename}'...")
+        try:
+            with open(filename, 'r') as f:
+                api_key = f.read().strip()
+            if not api_key:
+                print(f"API key file '{filename}' found but is empty.")
+                return None
+            else:
+                print("API key read successfully.")
+                return api_key
+        except Exception as e:
+            print(f"Warning: Error reading API key file '{filename}': {e}.")
+            return None
+    else:
+        print(f"API key file '{filename}' not found.")
+        return None
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
@@ -205,15 +289,14 @@ if __name__ == "__main__":
     output_map_filename = 'interactive_photo_path_map_simple_opaque.html' # New simplified name
 
     # --- API Key Handling ---
-    stadia_api_key_from_file = None
-    if os.path.exists(API_KEY_FILENAME):
-        print(f"Attempting to read Stadia API key from '{API_KEY_FILENAME}'...")
-        try:
-            with open(API_KEY_FILENAME, 'r') as f: stadia_api_key_from_file = f.read().strip()
-            if not stadia_api_key_from_file: print(f"API key file '{API_KEY_FILENAME}' found but is empty."); stadia_api_key_from_file = None
-            else: print("API key read successfully.")
-        except Exception as e: print(f"Warning: Error reading API key file '{API_KEY_FILENAME}': {e}."); stadia_api_key_from_file = None
-    else: print(f"API key file '{API_KEY_FILENAME}' not found. Stadia layer will not be available.")
+    stadia_api_key_from_file = read_api_key_from_file(API_KEY_FILENAME)
+    if not stadia_api_key_from_file:
+        print("Stadia layer will not be available.")
+
+    # --- Google Maps API Key Handling ---
+    google_maps_api_key_from_file = read_api_key_from_file(GOOGLE_MAPS_API_KEY_FILENAME)
+    if not google_maps_api_key_from_file:
+        print("No Google Maps API key found. Google Maps layer will not be available.")
 
     # --- File Check & Date Parsing ---
     if csv_file_path == './local_photo_locations.csv' and not os.path.exists(csv_file_path):
@@ -261,8 +344,8 @@ if __name__ == "__main__":
                     output_html_path=output_map_filename,
                     stadia_api_key=stadia_api_key_from_file,
                     add_start_end_markers=True,
-                    add_all_points=False
-                    # Removed slider/opacity args from call
+                    add_all_points=False,
+                    google_maps_api_key=google_maps_api_key_from_file # Pass the google maps api key
                 )
             except Exception as e_map: print(f"Error creating GeoDataFrame or Map: {e_map}"); import traceback; traceback.print_exc()
     except FileNotFoundError as e: print(f"\nFatal Error: {e}")
