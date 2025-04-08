@@ -7,7 +7,7 @@ from dateutil.parser import parse as dateutil_parse # Flexible date parsing
 import sys # For better error output
 
 # --- Configuration ---
-PHOTOS_DIR = './Photos' # The directory containing your downloaded photos
+PHOTOS_DIR = './EuropeMarch2025' # The directory containing your downloaded photos
 OUTPUT_CSV_FILE = 'local_photo_locations.csv'
 # Common image extensions with EXIF data
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.tif', '.tiff')
