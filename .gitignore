@@ -10,3 +10,4 @@ EuropeMarch2025/*
 *.html
 *.csv
 Timeline.json
+__pycache__/
