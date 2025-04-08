@@ -11,3 +11,4 @@ EuropeMarch2025/*
 *.csv
 Timeline.json
 __pycache__/
+*.geojson

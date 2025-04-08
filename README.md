@@ -1,0 +1,2 @@
+- Extract Timeline.json (Android settings -> Location -> Location Services -> Timeline -> Export Timeline Data)
+- Generate geojson (`python timeline_to_geojson.py`)
