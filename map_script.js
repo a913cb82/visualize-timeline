@@ -10,22 +10,38 @@ const GEOJSON_URL = 'timeline_data.geojson'; // Path to your data file
 
 function initMap() {
     console.log("Initializing map...");
-    // Create map instance centered on a default location (e.g., Europe)
-    // We'll fit bounds later once data is loaded
+    // Create map instance centered on a default location
     map = L.map('map').setView([48.8566, 2.3522], 5); // Paris, zoom level 5
 
-    // Add OpenStreetMap base layer
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
+    // --- Define Base Layers ---
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19 // Standard max zoom for OSM
+    });
 
-    // You can add other base layers or overlays here if desired
-    // L.control.layers(baseMaps, overlayMaps).addTo(map);
+    const esriNatGeo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles © Esri — National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC',
+        maxZoom: 16 // Esri NatGeo often has a lower max practical zoom
+    });
 
-    console.log("Map initialized.");
+    // --- Add Default Base Layer ---
+    esriNatGeo.addTo(map); // Add Esri NatGeo as the default
+
+    // --- Create Layer Control ---
+    const baseMaps = {
+        "Esri NatGeo": esriNatGeo,
+        "OpenStreetMap": osm
+        // Add other base maps here if desired (e.g., Satellite)
+        // "Esri Satellite": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles © Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community' })
+    };
+
+    // Add layer control to the map
+    L.control.layers(baseMaps, null, { collapsed: false }).addTo(map); // Add base layer switcher, not collapsed initially
+
+    console.log("Map initialized with Esri NatGeo and layer control.");
 }
 
-// --- Data Handling ---
+// --- Data Handling --- (Keep the rest of the file the same) ---
 
 async function loadData() {
     console.log(`Fetching data from ${GEOJSON_URL}...`);
@@ -55,7 +71,6 @@ async function loadData() {
         });
 
         // Sort features by date (important for drawing lines correctly)
-        // Although the Python script sorts, double-check here.
         allFeatures.sort((a, b) => a.properties.dateObj - b.properties.dateObj);
 
         console.log("Features processed and sorted.");
@@ -123,30 +138,26 @@ function updateMap() {
     }
 
     // --- Get and Parse Selected Dates ---
-    // Get dates as strings
     const startDateStr = startDateInput.value;
     const endDateStr = endDateInput.value;
 
-    // Convert to Date objects. IMPORTANT: Interpret as UTC dates.
-    // Create dates at the very start and very end of the selected days in UTC.
     const startDate = new Date(Date.UTC(
-        parseInt(startDateStr.substring(0, 4)), // Year
-        parseInt(startDateStr.substring(5, 7)) - 1, // Month (0-indexed)
-        parseInt(startDateStr.substring(8, 10)), // Day
-        0, 0, 0, 0 // H, M, S, MS (start of day UTC)
+        parseInt(startDateStr.substring(0, 4)),
+        parseInt(startDateStr.substring(5, 7)) - 1,
+        parseInt(startDateStr.substring(8, 10)),
+        0, 0, 0, 0
     ));
 
     const endDate = new Date(Date.UTC(
-        parseInt(endDateStr.substring(0, 4)), // Year
-        parseInt(endDateStr.substring(5, 7)) - 1, // Month (0-indexed)
-        parseInt(endDateStr.substring(8, 10)), // Day
-        23, 59, 59, 999 // H, M, S, MS (end of day UTC)
+        parseInt(endDateStr.substring(0, 4)),
+        parseInt(endDateStr.substring(5, 7)) - 1,
+        parseInt(endDateStr.substring(8, 10)),
+        23, 59, 59, 999
     ));
 
 
     if (startDate > endDate) {
         statusDiv.textContent = "Error: Start date cannot be after end date.";
-        // Optional: Clear map layers?
         clearMapLayers();
         return;
     }
@@ -167,13 +178,11 @@ function updateMap() {
 
     // --- Draw New Layers ---
     if (filteredFeatures.length > 0) {
-        // Extract coordinates for Polyline ([lat, lon] format for Leaflet)
         const coordinates = filteredFeatures.map(feature => [
             feature.properties.lat,
             feature.properties.lon
         ]);
 
-        // Create and add Polyline
         currentPolylineLayer = L.polyline(coordinates, {
             color: 'blue',
             weight: 3,
@@ -181,7 +190,6 @@ function updateMap() {
         }).addTo(map);
         console.log("Polyline drawn.");
 
-        // Add Start/End Markers (optional)
         const startPoint = filteredFeatures[0];
         const endPoint = filteredFeatures[filteredFeatures.length - 1];
 
@@ -196,9 +204,8 @@ function updateMap() {
         }
         console.log("Start/End markers added.");
 
-        // Fit map bounds to the new polyline
         try {
-             map.flyToBounds(currentPolylineLayer.getBounds(), { padding: [30, 30] }); // Use flyToBounds for smooth transition
+             map.flyToBounds(currentPolylineLayer.getBounds(), { padding: [30, 30] });
              console.log("Map bounds adjusted.");
         } catch (e) {
             console.warn("Could not fit bounds:", e);
@@ -216,25 +223,21 @@ function clearMapLayers() {
     if (currentPolylineLayer && map.hasLayer(currentPolylineLayer)) {
         map.removeLayer(currentPolylineLayer);
         currentPolylineLayer = null;
-        // console.log("Previous polyline removed.");
     }
     if (currentStartMarker && map.hasLayer(currentStartMarker)) {
         map.removeLayer(currentStartMarker);
         currentStartMarker = null;
-        // console.log("Previous start marker removed.");
     }
     if (currentEndMarker && map.hasLayer(currentEndMarker)) {
         map.removeLayer(currentEndMarker);
         currentEndMarker = null;
-        // console.log("Previous end marker removed.");
     }
 }
 
 
 // --- Script Execution ---
 
-// Ensure the DOM is loaded before initializing map and loading data
 document.addEventListener('DOMContentLoaded', () => {
     initMap();
-    loadData(); // Start loading data after map framework is ready
+    loadData();
 });
