@@ -4,10 +4,16 @@ import sys
 import os
 import warnings
 import json
+from geopy.distance import geodesic # Import for distance calculation
 
 # --- Constants ---
 TIMELINE_JSON_FILENAME = "Timeline.json"
 GEOJSON_OUTPUT_FILENAME = "timeline_data.geojson"
+
+# --- Simplification Thresholds ---
+# Adjust these values as needed
+MIN_TIME_DIFFERENCE_SECONDS = 3600  # Ignore points closer than 3600 seconds AND...
+MIN_DISTANCE_METERS = 50          # ... closer than 10 meters to the previous kept point
 
 # --- Functions ---
 
@@ -46,7 +52,7 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
 
         for segment in data['semanticSegments']:
              processed_count += 1
-             if processed_count % 10000 == 0: # Progress indicator every 10000 segments
+             if processed_count % 10000 == 0:
                   print(f"  Processed {processed_count}/{total_segments} segments...")
 
              if isinstance(segment, dict) and 'timelinePath' in segment and isinstance(segment['timelinePath'], list):
@@ -72,9 +78,13 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
 
         print("Parsing timestamps and converting to UTC...")
         try:
+            # Attempt to parse multiple formats robustly if needed, but start with standard
             df['timestamp'] = pd.to_datetime(df['timestamp_str'], errors='coerce', utc=True)
+            # Example of handling multiple formats if necessary:
+            # df['timestamp'] = pd.to_datetime(df['timestamp_str'], format='mixed', errors='coerce', utc=True)
         except Exception as e:
             print(f"Error parsing timestamps from timeline JSON: {e}")
+            # Consider logging problematic timestamps here if debugging is needed
             return None
 
         original_count = len(df)
@@ -87,34 +97,109 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
             print("No valid data remaining after cleaning.")
             return None
 
+        # Sort before dropping duplicates to ensure consistency
+        df.sort_values(by=['timestamp', 'latitude', 'longitude'], inplace=True)
+
         original_count = len(df)
+        # Drop exact duplicates first
         df.drop_duplicates(subset=['timestamp', 'latitude', 'longitude'], keep='first', inplace=True)
         removed_duplicates = original_count - len(df)
         if removed_duplicates > 0:
-             print(f"Removed {removed_duplicates} duplicate entries (same time and location).")
+             print(f"Removed {removed_duplicates} exact duplicate entries (same time and location).")
 
-        df.sort_values(by=['timestamp', 'latitude', 'longitude'], inplace=True)
-        print(f"Timeline data prepared and definitively sorted. {len(df)} valid location entries.")
-        return df[['timestamp', 'latitude', 'longitude', 'timestamp_str']] # Keep timestamp_str for GeoJSON
+        # Ensure sorting after potential drops
+        df.sort_values(by='timestamp', inplace=True)
+        df.reset_index(drop=True, inplace=True) # Reset index after sorting/dropping
+
+        print(f"Timeline data prepared and sorted. {len(df)} unique location entries before simplification.")
+        return df[['timestamp', 'latitude', 'longitude', 'timestamp_str']]
 
     except json.JSONDecodeError as e:
         print(f"Error: Failed to decode JSON file '{file_path}'. It might be corrupted. Error: {e}")
         return None
     except MemoryError:
-        print(f"Error: Ran out of memory trying to load '{file_path}'. The file might be too large for available RAM.")
+        print(f"Error: Ran out of memory trying to load '{file_path}'. The file might be too large.")
         return None
     except Exception as e:
         print(f"An unexpected error occurred while reading or processing the Timeline JSON: {e}")
         raise
 
+def simplify_locations(df: pd.DataFrame, time_threshold_sec: int, dist_threshold_m: int) -> pd.DataFrame:
+    """Simplifies the DataFrame by removing points too close in time and space."""
+    if df.empty:
+        return df
+
+    print(f"\nSimplifying locations: Removing points within {time_threshold_sec}s AND {dist_threshold_m}m of the previous kept point...")
+    if 'timestamp' not in df.columns or 'latitude' not in df.columns or 'longitude' not in df.columns:
+         print("Error: DataFrame missing required columns for simplification (timestamp, latitude, longitude).")
+         return df # Return original df if columns are missing
+
+    # Ensure data is sorted by time
+    df_sorted = df.sort_values(by='timestamp').reset_index(drop=True)
+
+    keep_indices = [0] # Always keep the first point
+    last_kept_idx = 0
+
+    min_time_delta = timedelta(seconds=time_threshold_sec)
+
+    total_points = len(df_sorted)
+    for current_idx in range(1, total_points):
+        # Progress indicator
+        if current_idx % 50000 == 0:
+             print(f"  Simplification progress: {current_idx}/{total_points} points checked...")
+
+        last_kept_point = df_sorted.iloc[last_kept_idx]
+        current_point = df_sorted.iloc[current_idx]
+
+        # Check time difference
+        time_diff = current_point['timestamp'] - last_kept_point['timestamp']
+
+        # If time difference is large enough, we definitely keep the point
+        if time_diff >= min_time_delta:
+            keep_indices.append(current_idx)
+            last_kept_idx = current_idx
+            continue # Move to the next point
+
+        # If time difference is small, check distance
+        coords_last = (last_kept_point['latitude'], last_kept_point['longitude'])
+        coords_current = (current_point['latitude'], current_point['longitude'])
+
+        try:
+             # Calculate distance only if time difference is small
+             distance_m = geodesic(coords_last, coords_current).meters
+        except ValueError as e:
+             # Handle potential errors from geopy (e.g., invalid coordinates somehow missed earlier)
+             print(f"Warning: Skipping distance calculation due to error at index {current_idx}: {e}")
+             # Decide whether to keep or discard based on time alone, or skip point entirely
+             # Let's keep it to be safe if distance fails, as time diff is small
+             # keep_indices.append(current_idx)
+             # last_kept_idx = current_idx
+             continue # Or discard if unsure: continue
+
+        # If BOTH time and distance are below threshold, discard the current point (by NOT adding its index)
+        if distance_m < dist_threshold_m:
+            # print(f"  Discarding point {current_idx}: TimeDiff={time_diff}, Dist={distance_m:.1f}m") # Debugging
+            continue # Skip to next point, effectively discarding this one
+
+        # If time is close but distance is far enough, keep the point
+        else:
+            keep_indices.append(current_idx)
+            last_kept_idx = current_idx
+
+    simplified_df = df_sorted.iloc[keep_indices].reset_index(drop=True)
+    removed_count = len(df_sorted) - len(simplified_df)
+    print(f"Simplification complete. Kept {len(simplified_df)} points (removed {removed_count}).")
+
+    return simplified_df
+
 
 def convert_df_to_geojson(df: pd.DataFrame, output_file: str):
-    """Converts processed DataFrame to GeoJSON and saves to a file."""
+    """Converts processed (and potentially simplified) DataFrame to GeoJSON."""
     if df.empty:
         print("Warning: DataFrame is empty. No GeoJSON will be created.")
         return
 
-    print(f"Converting DataFrame to GeoJSON and saving to: {output_file}")
+    print(f"Converting DataFrame ({len(df)} points) to GeoJSON: {output_file}")
 
     geojson_feature_collection = {
         "type": "FeatureCollection",
@@ -122,23 +207,28 @@ def convert_df_to_geojson(df: pd.DataFrame, output_file: str):
     }
 
     for index, row in df.iterrows():
+        # Ensure timestamp is valid before converting
+        ts = row.get('timestamp')
+        if pd.isna(ts):
+            print(f"Warning: Skipping row {index} due to missing/invalid timestamp during GeoJSON conversion.")
+            continue
+
         feature = {
             "type": "Feature",
             "geometry": {
                 "type": "Point",
-                "coordinates": [row['longitude'], row['latitude']] # GeoJSON is [lon, lat]
+                "coordinates": [row['longitude'], row['latitude']]
             },
             "properties": {
-                "timestamp": row['timestamp'].isoformat(), # ISO format for JS Date parsing
-                "timestamp_str": row['timestamp_str'] # Keep original string if needed for display
-                # Add other properties here if needed from the DataFrame
+                "timestamp": ts.isoformat().replace('+00:00', 'Z'), # Standard ISO 8601 format with Z for UTC
+                "timestamp_str": row.get('timestamp_str', '') # Include original if exists
             }
         }
         geojson_feature_collection['features'].append(feature)
 
     try:
         with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(geojson_feature_collection, f, ensure_ascii=False, indent=2) # Indent for readability
+            json.dump(geojson_feature_collection, f, ensure_ascii=False, separators=(',', ':')) # Use separators for smaller file size
         print(f"GeoJSON file created successfully: {output_file}")
     except Exception as e:
         print(f"Error writing GeoJSON file: {e}")
@@ -151,30 +241,38 @@ if __name__ == "__main__":
     timeline_json_path = TIMELINE_JSON_FILENAME
     geojson_output_path = GEOJSON_OUTPUT_FILENAME
 
-    # --- File Check ---
     if not os.path.exists(timeline_json_path):
-        print(f"\nERROR: The required Timeline JSON file was not found at: {timeline_json_path}")
-        print(f"Ensure '{TIMELINE_JSON_FILENAME}' is in the same directory.")
+        print(f"\nERROR: Timeline JSON not found: {timeline_json_path}")
         sys.exit(1)
     print(f"\nFound Timeline file: {timeline_json_path}")
 
-    # --- Load & Process Data ---
     try:
+        # 1. Load and perform initial cleaning
         all_locations_df = load_timeline_locations_from_json(timeline_json_path)
 
         if all_locations_df is None or all_locations_df.empty:
-            print("\nNo valid location data loaded from Timeline JSON. Exiting.")
+            print("\nNo valid location data loaded. Exiting.")
             sys.exit(0)
 
-        # --- Convert to GeoJSON ---
-        convert_df_to_geojson(all_locations_df, geojson_output_path)
+        # 2. Simplify the data *** NEW STEP ***
+        simplified_df = simplify_locations(
+            all_locations_df,
+            time_threshold_sec=MIN_TIME_DIFFERENCE_SECONDS,
+            dist_threshold_m=MIN_DISTANCE_METERS
+        )
 
+        if simplified_df.empty:
+             print("\nData became empty after simplification. Exiting.")
+             sys.exit(0)
+
+        # 3. Convert the *simplified* DataFrame to GeoJSON
+        convert_df_to_geojson(simplified_df, geojson_output_path)
 
     except FileNotFoundError as e:
         print(f"\nFatal Error: {e}")
         sys.exit(1)
     except Exception as e:
-        print(f"\nAn unexpected fatal error occurred during loading or processing: {e}")
+        print(f"\nAn unexpected fatal error occurred: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
