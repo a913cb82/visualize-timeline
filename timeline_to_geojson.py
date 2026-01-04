@@ -6,6 +6,7 @@ import warnings
 import json
 from geopy.distance import geodesic # Import for distance calculation
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 # --- Constants ---
 TIMELINE_JSON_FILENAME = "Timeline.json"
@@ -49,14 +50,9 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
 
         extracted_points = []
         total_segments = len(data['semanticSegments'])
-        print(f"Processing {total_segments} semantic segments...")
-        processed_count = 0
-
-        for segment in data['semanticSegments']:
-             processed_count += 1
-             if processed_count % 10000 == 0:
-                  print(f"  Processed {processed_count}/{total_segments} segments...")
-
+        
+        for segment in tqdm(data['semanticSegments'], desc="Processing semantic segments", unit="seg"):
+             # Ensure segment is a dict and has timelinePath list
              if isinstance(segment, dict) and 'timelinePath' in segment and isinstance(segment['timelinePath'], list):
                  for point_data in segment['timelinePath']:
                      if isinstance(point_data, dict) and 'point' in point_data and 'time' in point_data:
@@ -82,11 +78,8 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
         try:
             # Attempt to parse multiple formats robustly if needed, but start with standard
             df['timestamp'] = pd.to_datetime(df['timestamp_str'], errors='coerce', utc=True)
-            # Example of handling multiple formats if necessary:
-            # df['timestamp'] = pd.to_datetime(df['timestamp_str'], format='mixed', errors='coerce', utc=True)
         except Exception as e:
             print(f"Error parsing timestamps from timeline JSON: {e}")
-            # Consider logging problematic timestamps here if debugging is needed
             return None
 
         original_count = len(df)
@@ -131,10 +124,10 @@ def simplify_locations(df: pd.DataFrame, time_threshold_sec: int, dist_threshold
     if df.empty:
         return df
 
-    print(f"\nSimplifying locations: Removing points within {time_threshold_sec}s AND {dist_threshold_m}m of the previous kept point...")
+    print(f"\nSimplifying locations: Removing points within {time_threshold_sec}s AND {dist_threshold_m}m of previous point...")
     if 'timestamp' not in df.columns or 'latitude' not in df.columns or 'longitude' not in df.columns:
-         print("Error: DataFrame missing required columns for simplification (timestamp, latitude, longitude).")
-         return df # Return original df if columns are missing
+         print("Error: DataFrame missing required columns for simplification.")
+         return df
 
     # Ensure data is sorted by time
     df_sorted = df.sort_values(by='timestamp').reset_index(drop=True)
@@ -145,11 +138,7 @@ def simplify_locations(df: pd.DataFrame, time_threshold_sec: int, dist_threshold
     min_time_delta = timedelta(seconds=time_threshold_sec)
 
     total_points = len(df_sorted)
-    for current_idx in range(1, total_points):
-        # Progress indicator
-        if current_idx % 50000 == 0:
-             print(f"  Simplification progress: {current_idx}/{total_points} points checked...")
-
+    for current_idx in tqdm(range(1, total_points), desc="Simplifying locations", unit="pt"):
         last_kept_point = df_sorted.iloc[last_kept_idx]
         current_point = df_sorted.iloc[current_idx]
 
@@ -160,28 +149,21 @@ def simplify_locations(df: pd.DataFrame, time_threshold_sec: int, dist_threshold
         if time_diff >= min_time_delta:
             keep_indices.append(current_idx)
             last_kept_idx = current_idx
-            continue # Move to the next point
+            continue
 
         # If time difference is small, check distance
         coords_last = (last_kept_point['latitude'], last_kept_point['longitude'])
         coords_current = (current_point['latitude'], current_point['longitude'])
 
         try:
-             # Calculate distance only if time difference is small
              distance_m = geodesic(coords_last, coords_current).meters
         except ValueError as e:
-             # Handle potential errors from geopy (e.g., invalid coordinates somehow missed earlier)
              print(f"Warning: Skipping distance calculation due to error at index {current_idx}: {e}")
-             # Decide whether to keep or discard based on time alone, or skip point entirely
-             # Let's keep it to be safe if distance fails, as time diff is small
-             # keep_indices.append(current_idx)
-             # last_kept_idx = current_idx
-             continue # Or discard if unsure: continue
+             continue
 
-        # If BOTH time and distance are below threshold, discard the current point (by NOT adding its index)
+        # If BOTH time and distance are below threshold, discard the current point
         if distance_m < dist_threshold_m:
-            # print(f"  Discarding point {current_idx}: TimeDiff={time_diff}, Dist={distance_m:.1f}m") # Debugging
-            continue # Skip to next point, effectively discarding this one
+            continue
 
         # If time is close but distance is far enough, keep the point
         else:
@@ -208,11 +190,10 @@ def convert_df_to_geojson(df: pd.DataFrame, output_file: str):
         "features": []
     }
 
-    for index, row in df.iterrows():
+    for index, row in tqdm(df.iterrows(), total=len(df), desc="Creating GeoJSON", unit="pt"):
         # Ensure timestamp is valid before converting
         ts = row.get('timestamp')
         if pd.isna(ts):
-            print(f"Warning: Skipping row {index} due to missing/invalid timestamp during GeoJSON conversion.")
             continue
 
         feature = {
@@ -230,7 +211,7 @@ def convert_df_to_geojson(df: pd.DataFrame, output_file: str):
 
     try:
         with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(geojson_feature_collection, f, ensure_ascii=False, separators=(',', ':')) # Use separators for smaller file size
+            json.dump(geojson_feature_collection, f, ensure_ascii=False, separators=(',', ':'))
         print(f"GeoJSON file created successfully: {output_file}")
     except Exception as e:
         print(f"Error writing GeoJSON file: {e}")
@@ -256,7 +237,7 @@ if __name__ == "__main__":
             print("\nNo valid location data loaded. Exiting.")
             sys.exit(0)
 
-        # 2. Simplify the data *** NEW STEP ***
+        # 2. Simplify the data
         simplified_df = simplify_locations(
             all_locations_df,
             time_threshold_sec=MIN_TIME_DIFFERENCE_SECONDS,
