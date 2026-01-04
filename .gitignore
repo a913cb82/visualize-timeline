@@ -1,4 +1,10 @@
+
 .env
+.gemini/
 Timeline.json
-timeline_data.geojson
+__pycache__/
 config.js
+credentials.json
+gha-creds-*.json
+requirements.snapshot.txt
+timeline_data.geojson

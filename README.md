@@ -13,9 +13,15 @@ A high-performance, interactive web-based tool to visualize and explore your Goo
 
 ## Setup and Usage
 
-### 1. Export your Data
-- On your Android device: **Settings -> Location -> Location Services -> Timeline -> Export Timeline Data**.
-- Place the exported `Timeline.json` in the root of this project directory.
+### 1. Export your Location History
+
+You need a `Timeline.json` exported from Google. This data lives on your Android device (Google no longer keeps Timeline in the cloud for new accounts), so the export must come from the phone that holds it:
+
+1. On your Android phone, make sure Location History is on: **Settings → Location → Location Services → Timeline** (on some versions: **Google Maps → Settings → Personal content → Location History**).
+2. Open **Timeline** and choose **Export Timeline Data** (usually under the overflow **⋮** menu).
+3. Transfer the exported `Timeline.json` to your computer and place it in the root of this project directory.
+
+> Older, account-based history can alternatively be requested through **Google Takeout** (takeout.google.com) with the *Location History (Timeline)* item selected; export and place the resulting JSON as `Timeline.json`.
 
 ### 2. Environment Setup
 Create a virtual environment and install the required dependencies:
