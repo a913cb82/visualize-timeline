@@ -13,10 +13,16 @@ TIMELINE_JSON_FILENAME = "Timeline.json"
 GEOJSON_OUTPUT_FILENAME = "timeline_data.geojson"
 CONFIG_JS_FILENAME = "config.js"
 
+# --- Filtering Thresholds ---
+MAX_SPEED_KMH = 200               # Maximum realistic speed between points
+GLITCH_LOOKAHEAD_DAYS = 1         # Temporal window to find a recovery point
+EXCURSION_MIN_DIST_KM = 100       # Minimum distance for an excursion to be suspicious
+EXCURSION_MAX_SPEED_KMH = 100     # "High-ish" speed threshold for excursions
+EXCURSION_MAX_RADIUS_KM = 2       # Max internal spread for a cluster to be "tight"
+
 # --- Simplification Thresholds ---
-# Adjust these values as needed
 MIN_TIME_DIFFERENCE_SECONDS = 3600  # Ignore points closer than 3600 seconds AND...
-MIN_DISTANCE_METERS = 50          # ... closer than 10 meters to the previous kept point
+MIN_DISTANCE_METERS = 50          # ... closer than 50 meters to the previous kept point
 
 # --- Functions ---
 
@@ -49,10 +55,7 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
             return None
 
         extracted_points = []
-        total_segments = len(data['semanticSegments'])
-        
         for segment in tqdm(data['semanticSegments'], desc="Processing semantic segments", unit="seg"):
-             # Ensure segment is a dict and has timelinePath list
              if isinstance(segment, dict) and 'timelinePath' in segment and isinstance(segment['timelinePath'], list):
                  for point_data in segment['timelinePath']:
                      if isinstance(point_data, dict) and 'point' in point_data and 'time' in point_data:
@@ -76,7 +79,6 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
 
         print("Parsing timestamps and converting to UTC...")
         try:
-            # Attempt to parse multiple formats robustly if needed, but start with standard
             df['timestamp'] = pd.to_datetime(df['timestamp_str'], errors='coerce', utc=True)
         except Exception as e:
             print(f"Error parsing timestamps from timeline JSON: {e}")
@@ -92,21 +94,17 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
             print("No valid data remaining after cleaning.")
             return None
 
-        # Sort before dropping duplicates to ensure consistency
-        df.sort_values(by=['timestamp', 'latitude', 'longitude'], inplace=True)
+        # Sort primarily by timestamp
+        df.sort_values(by='timestamp', inplace=True)
+        df.reset_index(drop=True, inplace=True)
 
         original_count = len(df)
-        # Drop exact duplicates first
+        # Drop exact duplicates
         df.drop_duplicates(subset=['timestamp', 'latitude', 'longitude'], keep='first', inplace=True)
         removed_duplicates = original_count - len(df)
         if removed_duplicates > 0:
              print(f"Removed {removed_duplicates} exact duplicate entries (same time and location).")
 
-        # Ensure sorting after potential drops
-        df.sort_values(by='timestamp', inplace=True)
-        df.reset_index(drop=True, inplace=True) # Reset index after sorting/dropping
-
-        print(f"Timeline data prepared and sorted. {len(df)} unique location entries before simplification.")
         return df[['timestamp', 'latitude', 'longitude', 'timestamp_str']]
 
     except json.JSONDecodeError as e:
@@ -118,6 +116,123 @@ def load_timeline_locations_from_json(file_path: str) -> pd.DataFrame | None:
     except Exception as e:
         print(f"An unexpected error occurred while reading or processing the Timeline JSON: {e}")
         raise
+
+def is_cluster_tight(df_subset: pd.DataFrame, max_radius_km: float) -> bool:
+    """Checks if all points in a subset are within a certain radius of the first point."""
+    if df_subset.empty:
+        return True
+    
+    p0_coords = (df_subset.iloc[0]['latitude'], df_subset.iloc[0]['longitude'])
+    for idx, row in df_subset.iterrows():
+        try:
+            if geodesic(p0_coords, (row['latitude'], row['longitude'])).km > max_radius_km:
+                return False
+        except ValueError:
+            continue
+    return True
+
+def filter_glitches(df: pd.DataFrame, max_speed_kmh: int, lookahead_days: int) -> pd.DataFrame:
+    """
+    Filters out 'teleportation' glitches using a temporal forward-looking anchor algorithm.
+    Handles impossible speeds and tight-cluster distant excursions.
+    """
+    if df.empty or len(df) < 2:
+        return df
+
+    print(f"\nFiltering glitches: Removing points requiring speed > {max_speed_kmh} km/h or tight distant excursions...")
+    
+    keep_indices = [0]
+    anchor_idx = 0
+    total = len(df)
+    lookahead_delta = timedelta(days=lookahead_days)
+    
+    i = 1
+    pbar = tqdm(total=total, desc="Analyzing trajectory", unit="pt")
+    pbar.update(1)
+
+    while i < total:
+        p_anchor = df.iloc[anchor_idx]
+        p_curr = df.iloc[i]
+        
+        coords_a = (p_anchor['latitude'], p_anchor['longitude'])
+        coords_c = (p_curr['latitude'], p_curr['longitude'])
+        
+        try:
+            dist_km = geodesic(coords_a, coords_c).km
+        except ValueError:
+            i += 1
+            pbar.update(1)
+            continue
+
+        time_diff_h = (p_curr['timestamp'] - p_anchor['timestamp']).total_seconds() / 3600.0
+        speed_kmh = dist_km / time_diff_h if time_diff_h > 0 else 0
+        
+        # Decide if we should look ahead for recovery
+        impossible_speed = speed_kmh > max_speed_kmh
+        suspicious_excursion = (dist_km > EXCURSION_MIN_DIST_KM and speed_kmh > EXCURSION_MAX_SPEED_KMH)
+
+        if not impossible_speed and not suspicious_excursion:
+            # Point is sane, accept it as the new anchor
+            keep_indices.append(i)
+            anchor_idx = i
+            i += 1
+            pbar.update(1)
+        else:
+            # Potential glitch found. Look ahead temporally for recovery to vicinity of anchor.
+            found_recovery = False
+            lookahead_limit_time = p_curr['timestamp'] + lookahead_delta
+            
+            for j in range(i + 1, total):
+                p_future = df.iloc[j]
+                if p_future['timestamp'] > lookahead_limit_time:
+                    break
+                
+                coords_f = (p_future['latitude'], p_future['longitude'])
+                try:
+                    dist_f = geodesic(coords_a, coords_f).km
+                except ValueError:
+                    continue
+
+                t_f = (p_future['timestamp'] - p_anchor['timestamp']).total_seconds() / 3600.0
+                v_f = dist_f / t_f if t_f > 0 else 0
+                
+                if v_f <= max_speed_kmh:
+                    # Found a recovery point within the time window.
+                    # Now decide whether to discard the skipped points.
+                    should_discard = False
+                    
+                    if impossible_speed:
+                        # Fallback logic: if it was physically impossible, discard it.
+                        should_discard = True
+                    else:
+                        # Excursion logic: only discard if the cluster is tight.
+                        # If it's a spread-out excursion, assume it might be a flight.
+                        if is_cluster_tight(df.iloc[i:j], EXCURSION_MAX_RADIUS_KM):
+                            should_discard = True
+                    
+                    if should_discard:
+                        pbar.update(j - i)
+                        i = j
+                        found_recovery = True
+                        break
+                    else:
+                        # It was a dispersed excursion (not a tight glitch). 
+                        # Stop lookahead and accept the first point of the excursion.
+                        break
+            
+            if not found_recovery:
+                # No recovery found or excursion was accepted.
+                keep_indices.append(i)
+                anchor_idx = i
+                i += 1
+                pbar.update(1)
+                
+    pbar.close()
+    
+    filtered_df = df.iloc[keep_indices].reset_index(drop=True)
+    removed = total - len(filtered_df)
+    print(f"Glitch filtering complete. Kept {len(filtered_df)} points (removed {removed}).")
+    return filtered_df
 
 def simplify_locations(df: pd.DataFrame, time_threshold_sec: int, dist_threshold_m: int) -> pd.DataFrame:
     """Simplifies the DataFrame by removing points too close in time and space."""
@@ -176,7 +291,6 @@ def simplify_locations(df: pd.DataFrame, time_threshold_sec: int, dist_threshold
 
     return simplified_df
 
-
 def convert_df_to_geojson(df: pd.DataFrame, output_file: str):
     """Converts processed (and potentially simplified) DataFrame to GeoJSON."""
     if df.empty:
@@ -216,7 +330,6 @@ def convert_df_to_geojson(df: pd.DataFrame, output_file: str):
     except Exception as e:
         print(f"Error writing GeoJSON file: {e}")
 
-
 def generate_config_js(output_path: str):
     """Generates config.js for the frontend from environment variables."""
     print("\nGenerating config.js...")
@@ -224,7 +337,8 @@ def generate_config_js(output_path: str):
     google_maps_api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
     stadia_api_key = os.getenv("STADIA_API_KEY", "")
 
-    config_content = f"""// Auto-generated config file
+    config_content = f"""
+// Auto-generated config file
 const CONFIG = {{
     GOOGLE_MAPS_API_KEY: "{google_maps_api_key}",
     STADIA_API_KEY: "{stadia_api_key}"
@@ -236,7 +350,6 @@ const CONFIG = {{
         print(f"Config file created successfully: {output_path}")
     except Exception as e:
         print(f"Error writing config file: {e}")
-
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
@@ -251,22 +364,25 @@ if __name__ == "__main__":
         all_locations_df = load_timeline_locations_from_json(TIMELINE_JSON_FILENAME)
 
         if all_locations_df is not None and not all_locations_df.empty:
-            # 2. Simplify the data
+            # 2. Filter out teleportation glitches
+            filtered_df = filter_glitches(all_locations_df, MAX_SPEED_KMH, GLITCH_LOOKAHEAD_DAYS)
+            
+            # 3. Simplify the data
             simplified_df = simplify_locations(
-                all_locations_df,
+                filtered_df,
                 time_threshold_sec=MIN_TIME_DIFFERENCE_SECONDS,
                 dist_threshold_m=MIN_DISTANCE_METERS
             )
 
             if not simplified_df.empty:
-                # 3. Convert to GeoJSON
+                # 4. Convert to GeoJSON
                 convert_df_to_geojson(simplified_df, GEOJSON_OUTPUT_FILENAME)
             else:
-                print("\nData became empty after simplification.")
+                print("\nData became empty after processing.")
         else:
             print("\nNo valid location data loaded.")
 
-        # 4. Always generate config.js
+        # 5. Always generate config.js
         generate_config_js(CONFIG_JS_FILENAME)
 
     except Exception as e:
