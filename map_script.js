@@ -50,9 +50,35 @@ function initMap() {
     }).setView([48.8566, 2.3522], 5);
 
     const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19 });
-    const esriNatGeo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles © Esri — ...', maxZoom: 16 });
+    const esriNatGeo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles © Esri — Source: National Geographic, Esri, DeLorme, HERE, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC', maxZoom: 16 });
     esriNatGeo.addTo(map);
-    const baseMaps = { "Esri NatGeo": esriNatGeo, "OpenStreetMap": osm };
+
+    const baseMaps = {
+        "Esri NatGeo": esriNatGeo,
+        "OpenStreetMap": osm
+    };
+
+    // --- Conditional Layers based on API Keys ---
+    if (typeof CONFIG !== 'undefined') {
+        if (CONFIG.STADIA_API_KEY) {
+            const stadiaTilesUrl = `https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}.png?api_key=${CONFIG.STADIA_API_KEY}`;
+            baseMaps["Stadia Stamen Terrain"] = L.tileLayer(stadiaTilesUrl, {
+                attribution: '© Stadia Maps, © OpenMapTiles © OpenStreetMap contributors',
+                maxZoom: 18
+            });
+        }
+
+        if (CONFIG.GOOGLE_MAPS_API_KEY) {
+            const googleRoads = L.tileLayer(`https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&key=${CONFIG.GOOGLE_MAPS_API_KEY}`, { attribution: 'Google Maps' });
+            const googleTerrain = L.tileLayer(`https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&key=${CONFIG.GOOGLE_MAPS_API_KEY}`, { attribution: 'Google Maps' });
+            const googleHybrid = L.tileLayer(`https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&key=${CONFIG.GOOGLE_MAPS_API_KEY}`, { attribution: 'Google Maps' });
+
+            baseMaps["Google Maps"] = googleRoads;
+            baseMaps["Google Terrain"] = googleTerrain;
+            baseMaps["Google Hybrid"] = googleHybrid;
+        }
+    }
+
     L.control.layers(baseMaps, null, { collapsed: true, position: 'topright' }).addTo(map);
 
     rangeMinDisplay = document.getElementById('range-min-display');

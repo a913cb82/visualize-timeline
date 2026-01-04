@@ -5,10 +5,12 @@ import os
 import warnings
 import json
 from geopy.distance import geodesic # Import for distance calculation
+from dotenv import load_dotenv
 
 # --- Constants ---
 TIMELINE_JSON_FILENAME = "Timeline.json"
 GEOJSON_OUTPUT_FILENAME = "timeline_data.geojson"
+CONFIG_JS_FILENAME = "config.js"
 
 # --- Simplification Thresholds ---
 # Adjust these values as needed
@@ -278,3 +280,20 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print("\n--- Script Finished ---")
+
+    # --- Generate config.js from .env ---
+    print("\nGenerating config.js...")
+    load_dotenv()
+    google_maps_api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    stadia_api_key = os.getenv("STADIA_API_KEY", "")
+
+    config_content = f"""// Auto-generated config file
+const CONFIG = {{
+    GOOGLE_MAPS_API_KEY: "{google_maps_api_key}",
+    STADIA_API_KEY: "{stadia_api_key}"
+}};
+"""
+    with open(CONFIG_JS_FILENAME, "w") as f:
+        f.write(config_content)
+        print(f"Config file created successfully: {CONFIG_JS_FILENAME}")
+    

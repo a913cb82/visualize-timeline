@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timeline Map</title>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+
+    <!-- noUiSlider CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.css" integrity="sha512-qveKnGrvOChbSzAdtSs8p69eoLegyh+1hwOMbmpCViIwj7rn4oJjdmMvWOuyQlTOZgTlZA0N2PXA7iA8/2TUYA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+    <!-- Custom CSS -->
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: sans-serif;
+            display: flex; /* Use flexbox for layout */
+            flex-direction: column; /* Stack map and slider vertically */
+        }
+        #map {
+            flex-grow: 1; /* Map takes remaining vertical space */
+            width: 100%;
+        }
+
+        #slider-container {
+            position: fixed; /* Stick to the bottom */
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background-color: rgba(255, 255, 255, 0.9); /* Slightly transparent white */
+            padding: 15px 30px; /* More padding */
+            box-sizing: border-box; /* Include padding in width */
+            z-index: 1000; /* Above map tiles */
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.15); /* Shadow on top */
+            display: flex;
+            flex-direction: column; /* Stack labels and slider */
+            gap: 8px; /* Space between elements */
+        }
+
+        .slider-labels {
+            display: flex;
+            justify-content: space-between; /* Push labels to ends */
+            font-size: 0.9em;
+            color: #333;
+            font-weight: bold;
+        }
+
+        #date-slider {
+             height: 10px;
+        }
+
+        /* Style noUiSlider handles and connect bar */
+        #date-slider .noUi-connect { background: #3498db; }
+        #date-slider .noUi-handle {
+            background: #fff;
+            border: 1px solid #ccc;
+            border-radius: 50%;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+            cursor: grab;
+            height: 18px; width: 18px; top: -5px; right: -9px;
+        }
+        #date-slider .noUi-handle:active { cursor: grabbing; }
+        #date-slider .noUi-handle:focus { outline: none; }
+
+        /* NEW: Style for Range Display */
+        .range-display {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8em; /* Smaller font */
+            color: #666;      /* Grey color */
+            margin-top: 4px;   /* Space above */
+        }
+
+        #filterStatus {
+            font-size: 0.9em;
+            margin-top: 5px;
+            color: #555;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- Slider Controls Container -->
+    <div id="slider-container">
+         <div class="slider-labels">
+             <span id="slider-start-date">Start Date</span>
+             <span id="slider-end-date">End Date</span>
+         </div>
+        <div id="date-slider"></div> <!-- The slider element -->
+         <!-- NEW: Range Display -->
+        <div class="range-display">
+            <span id="range-min-display">Min Range: ...</span>
+            <span id="range-max-display">Max Range: ...</span>
+        </div>
+        <div id="filterStatus">Loading data...</div> <!-- Status display -->
+    </div>
+
+
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+
+    <!-- noUiSlider JavaScript -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.js" integrity="sha512-UOJe4paV6hYWBnS0c9GnIRH8PLm2nFK22uhfAvsTIqd3uwnWsVri1OPn5fJYdLtGY3wB11LGHJ4yPU1WFJeBYQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <!-- App Configuration -->
+    <script src="config.js"></script>
+
+    <!-- Your Custom Map JavaScript (MUST BE LAST) -->
+    <script src="map_script.js"></script>
+
+</body>
+</html>

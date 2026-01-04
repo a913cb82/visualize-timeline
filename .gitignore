@@ -1,14 +1,4 @@
-*.png
-venv/*
-stadia_api_key.txt
-google_maps_api_key.txt
-credentials.json
-Photos/*
-WalesFeb2025/*
-EuropeMarch2025/*
-*.pickle*
-*.html
-*.csv
+.env
 Timeline.json
-__pycache__/
-*.geojson
+timeline_data.geojson
+config.js
