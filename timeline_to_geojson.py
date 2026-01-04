@@ -217,52 +217,8 @@ def convert_df_to_geojson(df: pd.DataFrame, output_file: str):
         print(f"Error writing GeoJSON file: {e}")
 
 
-# --- Main Execution Block ---
-if __name__ == "__main__":
-    print("--- Timeline to GeoJSON Converter ---")
-
-    timeline_json_path = TIMELINE_JSON_FILENAME
-    geojson_output_path = GEOJSON_OUTPUT_FILENAME
-
-    if not os.path.exists(timeline_json_path):
-        print(f"\nERROR: Timeline JSON not found: {timeline_json_path}")
-        sys.exit(1)
-    print(f"\nFound Timeline file: {timeline_json_path}")
-
-    try:
-        # 1. Load and perform initial cleaning
-        all_locations_df = load_timeline_locations_from_json(timeline_json_path)
-
-        if all_locations_df is None or all_locations_df.empty:
-            print("\nNo valid location data loaded. Exiting.")
-            sys.exit(0)
-
-        # 2. Simplify the data
-        simplified_df = simplify_locations(
-            all_locations_df,
-            time_threshold_sec=MIN_TIME_DIFFERENCE_SECONDS,
-            dist_threshold_m=MIN_DISTANCE_METERS
-        )
-
-        if simplified_df.empty:
-             print("\nData became empty after simplification. Exiting.")
-             sys.exit(0)
-
-        # 3. Convert the *simplified* DataFrame to GeoJSON
-        convert_df_to_geojson(simplified_df, geojson_output_path)
-
-    except FileNotFoundError as e:
-        print(f"\nFatal Error: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\nAn unexpected fatal error occurred: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
-    print("\n--- Script Finished ---")
-
-    # --- Generate config.js from .env ---
+def generate_config_js(output_path: str):
+    """Generates config.js for the frontend from environment variables."""
     print("\nGenerating config.js...")
     load_dotenv()
     google_maps_api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
@@ -274,7 +230,49 @@ const CONFIG = {{
     STADIA_API_KEY: "{stadia_api_key}"
 }};
 """
-    with open(CONFIG_JS_FILENAME, "w") as f:
-        f.write(config_content)
-        print(f"Config file created successfully: {CONFIG_JS_FILENAME}")
-    
+    try:
+        with open(output_path, "w", encoding='utf-8') as f:
+            f.write(config_content)
+        print(f"Config file created successfully: {output_path}")
+    except Exception as e:
+        print(f"Error writing config file: {e}")
+
+
+# --- Main Execution Block ---
+if __name__ == "__main__":
+    print("--- Timeline to GeoJSON Converter ---")
+
+    if not os.path.exists(TIMELINE_JSON_FILENAME):
+        print(f"\nERROR: Timeline JSON not found: {TIMELINE_JSON_FILENAME}")
+        sys.exit(1)
+
+    try:
+        # 1. Load and perform initial cleaning
+        all_locations_df = load_timeline_locations_from_json(TIMELINE_JSON_FILENAME)
+
+        if all_locations_df is not None and not all_locations_df.empty:
+            # 2. Simplify the data
+            simplified_df = simplify_locations(
+                all_locations_df,
+                time_threshold_sec=MIN_TIME_DIFFERENCE_SECONDS,
+                dist_threshold_m=MIN_DISTANCE_METERS
+            )
+
+            if not simplified_df.empty:
+                # 3. Convert to GeoJSON
+                convert_df_to_geojson(simplified_df, GEOJSON_OUTPUT_FILENAME)
+            else:
+                print("\nData became empty after simplification.")
+        else:
+            print("\nNo valid location data loaded.")
+
+        # 4. Always generate config.js
+        generate_config_js(CONFIG_JS_FILENAME)
+
+    except Exception as e:
+        print(f"\nAn unexpected fatal error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+    print("\n--- Script Finished ---")

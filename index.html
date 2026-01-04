@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Timeline Map</title>
+    <title>Google Timeline Viewer</title>
 
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -11,113 +11,124 @@
           crossorigin=""/>
 
     <!-- noUiSlider CSS -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.css" integrity="sha512-qveKnGrvOChbSzAdtSs8p69eoLegyh+1hwOMbmpCViIwj7rn4oJjdmMvWOuyQlTOZgTlZA0N2PXA7iA8/2TUYA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.css" 
+          integrity="sha512-qveKnGrvOChbSzAdtSs8p69eoLegyh+1hwOMbmpCViIwj7rn4oJjdmMvWOuyQlTOZgTlZA0N2PXA7iA8/2TUYA==" 
+          crossorigin="anonymous" referrerpolicy="no-referrer" />
 
-    <!-- Custom CSS -->
     <style>
+        :root {
+            --slider-bg: rgba(255, 255, 255, 0.95);
+            --primary-color: #3498db;
+            --text-main: #333;
+            --text-sub: #666;
+            --shadow: 0 -2px 10px rgba(0,0,0,0.1);
+        }
+
         html, body {
             height: 100%;
             margin: 0;
             padding: 0;
-            font-family: sans-serif;
-            display: flex; /* Use flexbox for layout */
-            flex-direction: column; /* Stack map and slider vertically */
-        }
-        #map {
-            flex-grow: 1; /* Map takes remaining vertical space */
-            width: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
         }
 
-        #slider-container {
-            position: fixed; /* Stick to the bottom */
+        #map {
+            height: 100vh;
+            width: 100vw;
+            z-index: 1;
+        }
+
+        #ui-container {
+            position: fixed;
             bottom: 0;
             left: 0;
             width: 100%;
-            background-color: rgba(255, 255, 255, 0.9); /* Slightly transparent white */
-            padding: 15px 30px; /* More padding */
-            box-sizing: border-box; /* Include padding in width */
-            z-index: 1000; /* Above map tiles */
-            box-shadow: 0 -2px 5px rgba(0,0,0,0.15); /* Shadow on top */
+            background-color: var(--slider-bg);
+            padding: 20px 40px;
+            box-sizing: border-box;
+            z-index: 1000;
+            box-shadow: var(--shadow);
             display: flex;
-            flex-direction: column; /* Stack labels and slider */
-            gap: 8px; /* Space between elements */
+            flex-direction: column;
+            gap: 12px;
         }
 
-        .slider-labels {
+        .slider-header {
             display: flex;
-            justify-content: space-between; /* Push labels to ends */
-            font-size: 0.9em;
-            color: #333;
-            font-weight: bold;
+            justify-content: space-between;
+            font-size: 0.95rem;
+            color: var(--text-main);
+            font-weight: 600;
         }
 
         #date-slider {
-             height: 10px;
+            height: 8px;
+            margin: 10px 0;
         }
 
-        /* Style noUiSlider handles and connect bar */
-        #date-slider .noUi-connect { background: #3498db; }
-        #date-slider .noUi-handle {
+        /* noUiSlider Customization */
+        .noUi-connect { background: var(--primary-color); }
+        .noUi-handle {
             background: #fff;
-            border: 1px solid #ccc;
+            border: 2px solid var(--primary-color);
             border-radius: 50%;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
             cursor: grab;
-            height: 18px; width: 18px; top: -5px; right: -9px;
+            height: 20px !important;
+            width: 20px !important;
+            top: -7px !important;
+            right: -10px !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
         }
-        #date-slider .noUi-handle:active { cursor: grabbing; }
-        #date-slider .noUi-handle:focus { outline: none; }
+        .noUi-handle:after, .noUi-handle:before { display: none; }
+        .noUi-handle:active { cursor: grabbing; }
 
-        /* NEW: Style for Range Display */
-        .range-display {
+        .range-info {
             display: flex;
             justify-content: space-between;
-            font-size: 0.8em; /* Smaller font */
-            color: #666;      /* Grey color */
-            margin-top: 4px;   /* Space above */
+            font-size: 0.8rem;
+            color: var(--text-sub);
         }
 
         #filterStatus {
-            font-size: 0.9em;
-            margin-top: 5px;
-            color: #555;
+            font-size: 0.9rem;
+            color: var(--text-main);
             text-align: center;
+            min-height: 1.2em;
         }
     </style>
 </head>
 <body>
 
-    <!-- Map Container -->
     <div id="map"></div>
 
-    <!-- Slider Controls Container -->
-    <div id="slider-container">
-         <div class="slider-labels">
-             <span id="slider-start-date">Start Date</span>
-             <span id="slider-end-date">End Date</span>
-         </div>
-        <div id="date-slider"></div> <!-- The slider element -->
-         <!-- NEW: Range Display -->
-        <div class="range-display">
-            <span id="range-min-display">Min Range: ...</span>
-            <span id="range-max-display">Max Range: ...</span>
+    <div id="ui-container">
+        <div class="slider-header">
+            <span id="slider-start-date">Loading...</span>
+            <span id="slider-end-date">Loading...</span>
         </div>
-        <div id="filterStatus">Loading data...</div> <!-- Status display -->
+
+        <div id="date-slider"></div>
+
+        <div class="range-info">
+            <span id="range-min-display">Min: ...</span>
+            <span id="range-max-display">Max: ...</span>
+        </div>
+
+        <div id="filterStatus">Initializing map data...</div>
     </div>
 
-
-    <!-- Leaflet JavaScript -->
+    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
             crossorigin=""></script>
 
-    <!-- noUiSlider JavaScript -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.js" integrity="sha512-UOJe4paV6hYWBnS0c9GnIRH8PLm2nFK22uhfAvsTIqd3uwnWsVri1OPn5fJYdLtGY3wB11LGHJ4yPU1WFJeBYQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <!-- noUiSlider JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.7.1/nouislider.min.js" 
+            integrity="sha512-UOJe4paV6hYWBnS0c9GnIRH8PLm2nFK22uhfAvsTIqd3uwnWsVri1OPn5fJYdLtGY3wB11LGHJ4yPU1WFJeBYQ==" 
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
-    <!-- App Configuration -->
+    <!-- Configuration & App Logic -->
     <script src="config.js"></script>
-
-    <!-- Your Custom Map JavaScript (MUST BE LAST) -->
     <script src="map_script.js"></script>
 
 </body>
