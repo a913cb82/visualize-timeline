@@ -46,7 +46,7 @@ let updateMapTimeout = null;
 function initMap() {
     console.log("Initializing map with Canvas renderer...");
     map = L.map('map', {
-        preferCanvas: true
+        preferCanvas: true // Keep Canvas renderer, it's generally better for many features than SVG
     }).setView([48.8566, 2.3522], 5);
 
     const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19 });
@@ -57,7 +57,7 @@ function initMap() {
 
     rangeMinDisplay = document.getElementById('range-min-display');
     rangeMaxDisplay = document.getElementById('range-max-display');
-    segmentLayerGroup = L.featureGroup().addTo(map);
+    segmentLayerGroup = L.featureGroup().addTo(map); // FeatureGroup is fine for this
 
     console.log("Map initialized.");
 }
@@ -78,14 +78,15 @@ async function loadData() {
             return;
         }
 
-        // Process and sort features, initialize properties
         allFeatures = geojsonData.features
             .filter(feature =>
                 feature?.properties?.timestamp &&
                 feature?.geometry?.coordinates?.length === 2
             )
             .map(feature => {
-                feature.properties.dateObj = new Date(feature.properties.timestamp);
+                const dateObj = new Date(feature.properties.timestamp);
+                feature.properties.timestampMs = dateObj.getTime(); // Use number timestamp
+                feature.properties.dateObj = dateObj;
                 feature.properties.lat = feature.geometry.coordinates[1];
                 feature.properties.lon = feature.geometry.coordinates[0];
                 feature.properties.segmentSpeed = 0;
@@ -99,16 +100,20 @@ async function loadData() {
              return;
         }
 
-        allFeatures.sort((a, b) => a.properties.dateObj.getTime() - b.properties.dateObj.getTime());
+        allFeatures.sort((a, b) => a.properties.timestampMs - b.properties.timestampMs);
 
-        minTimestamp = allFeatures[0].properties.dateObj.getTime();
-        maxTimestamp = allFeatures[allFeatures.length - 1].properties.dateObj.getTime();
-        if (minTimestamp === maxTimestamp) {
-            maxTimestamp += MIN_RANGE_WIDTH_MS;
+        minTimestamp = allFeatures[0].properties.timestampMs;
+        maxTimestamp = allFeatures[allFeatures.length - 1].properties.timestampMs;
+
+        if (minTimestamp === maxTimestamp && allFeatures.length > 0) {
+             maxTimestamp += MIN_RANGE_WIDTH_MS;
+        } else if (minTimestamp > maxTimestamp) {
+            console.error("Error: minTimestamp > maxTimestamp after sorting.");
+            statusDiv.textContent = "Error processing data timestamps.";
+            return;
         }
 
-        // Calculate segment styles (speed, distance -> weight)
-        calculateSegmentStyles(); // *** MODIFIED ***
+        calculateSegmentStyles(); // Calculate weights once
 
         console.log(`Features processed. Absolute range: ${new Date(minTimestamp).toISOString()} to ${new Date(maxTimestamp).toISOString()}`);
         setupDateSlider();
@@ -119,10 +124,11 @@ async function loadData() {
     }
 }
 
-// --- Calculate Segment Styles based on Speed OR Distance Threshold --- // *** MODIFIED ***
+// --- Calculate Segment Styles based on Speed OR Distance Threshold ---
 function calculateSegmentStyles() {
     if (allFeatures.length < 2) return;
-    console.log(`Using Speed Threshold: ${SPEED_THRESHOLD_MPS.toFixed(2)} m/s OR Distance Threshold: ${(DISTANCE_THRESHOLD_METERS / 1000).toFixed(1)} km`);
+    console.log(`Calculating segment styles...`);
+    console.time("calculateSegmentStyles"); // Time the whole calculation
 
     for (let i = 0; i < allFeatures.length - 1; i++) {
         const p1 = allFeatures[i];
@@ -131,59 +137,58 @@ function calculateSegmentStyles() {
         const latLng1 = L.latLng(p1.properties.lat, p1.properties.lon);
         const latLng2 = L.latLng(p2.properties.lat, p2.properties.lon);
 
-        const distance = latLng1.distanceTo(latLng2); // meters
-        const timeDiffMs = p2.properties.dateObj.getTime() - p1.properties.dateObj.getTime(); // milliseconds
+        const distance = latLng1.distanceTo(latLng2);
+        const timeDiffMs = p2.properties.timestampMs - p1.properties.timestampMs;
 
         let speed = 0;
         let isFast = false;
-        // Calculate speed only if time difference is meaningful
         if (timeDiffMs > 1) {
-            speed = distance / (timeDiffMs / 1000.0); // meters per second
+            speed = distance / (timeDiffMs / 1000.0);
             isFast = (speed >= SPEED_THRESHOLD_MPS);
         }
-
-        // Store speed on the starting point (mostly for potential debugging/info)
         p1.properties.segmentSpeed = speed;
-
-        // *** NEW: Check distance threshold ***
         const isLongDistance = (distance >= DISTANCE_THRESHOLD_METERS);
 
-        // Assign weight if EITHER condition is met
-        if (isFast || isLongDistance) {
-            p1.properties.segmentWeight = FAST_SEGMENT_WEIGHT;
-        } else {
-            p1.properties.segmentWeight = NORMAL_SEGMENT_WEIGHT;
-        }
+        p1.properties.segmentWeight = (isFast || isLongDistance) ? FAST_SEGMENT_WEIGHT : NORMAL_SEGMENT_WEIGHT;
     }
-     // Ensure the last point has default weight (it doesn't start a segment)
-    allFeatures[allFeatures.length - 1].properties.segmentSpeed = 0;
-    allFeatures[allFeatures.length - 1].properties.segmentWeight = NORMAL_SEGMENT_WEIGHT;
+    if (allFeatures.length > 0) {
+        allFeatures[allFeatures.length - 1].properties.segmentSpeed = 0;
+        allFeatures[allFeatures.length - 1].properties.segmentWeight = NORMAL_SEGMENT_WEIGHT;
+    }
 
-    console.log("Segment weights calculated using speed OR distance threshold.");
+    console.timeEnd("calculateSegmentStyles");
+    console.log("Segment weights calculated.");
 }
 
 
 // --- Date Formatting Helper ---
 function formatDateForDisplay(timestampOrDate) {
-    const date = (timestampOrDate instanceof Date) ? timestampOrDate : new Date(timestampOrDate);
+    const date = (timestampOrDate instanceof Date) ? timestampOrDate : new Date(Number(timestampOrDate));
+    if (isNaN(date.getTime())) return "Invalid Date";
     return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 // --- Update Range Display UI ---
 function updateRangeDisplay() {
     if (!dateSlider || !rangeMinDisplay || !rangeMaxDisplay) return;
-    const currentRange = dateSlider.options.range;
-    rangeMinDisplay.textContent = `Min: ${formatDateForDisplay(Number(currentRange.min))}`;
-    rangeMaxDisplay.textContent = `Max: ${formatDateForDisplay(Number(currentRange.max))}`;
+    try {
+        const currentRange = dateSlider.options.range;
+        rangeMinDisplay.textContent = `Min: ${formatDateForDisplay(Number(currentRange.min))}`;
+        rangeMaxDisplay.textContent = `Max: ${formatDateForDisplay(Number(currentRange.max))}`;
+    } catch (error) {
+        console.error("Error updating range display:", error);
+        rangeMinDisplay.textContent = "Min: Error";
+        rangeMaxDisplay.textContent = "Max: Error";
+    }
 }
 
 
 // --- Functions to Control the Slider Range Adjustment Loop ---
+// (These functions remain unchanged)
 function stopAdjustmentLoop() { if (rAFHandle) cancelAnimationFrame(rAFHandle); rAFHandle = null; isAdjustmentLoopRunning = false; }
 function startAdjustmentLoop() { if (!isAdjustmentLoopRunning && dateSlider) { isAdjustmentLoopRunning = true; rAFHandle = requestAnimationFrame(adjustmentLoop); } }
 function adjustmentLoop() { if (!isAdjustmentLoopRunning) return; const keepLooping = adjustRangeGradually(); if (keepLooping && isAdjustmentLoopRunning) rAFHandle = requestAnimationFrame(adjustmentLoop); else { isAdjustmentLoopRunning = false; rAFHandle = null; } }
-function adjustRangeGradually() { // Adjusts slider range
-    // ... (This function remains unchanged) ...
+function adjustRangeGradually() {
     if (!dateSlider) return false;
     const sliderOptions = dateSlider.options;
     const currentRange = sliderOptions.range;
@@ -195,8 +200,9 @@ function adjustRangeGradually() { // Adjusts slider range
     const startHandleValue = handleValues[0];
     const endHandleValue = handleValues[1];
     const handleSeparation = endHandleValue - startHandleValue;
-    const minHandleSeparationMs = (maxTimestamp - minTimestamp) * MIN_HANDLE_SEPARATION_FACTOR;
-    if (handleSeparation <= minHandleSeparationMs) return true;
+    const absoluteRangeWidth = maxTimestamp - minTimestamp;
+    const minHandleSeparationMs = absoluteRangeWidth > 0 ? absoluteRangeWidth * MIN_HANDLE_SEPARATION_FACTOR : MIN_RANGE_WIDTH_MS;
+    if (handleSeparation < minHandleSeparationMs) return true;
     const idealWidth = handleSeparation / TARGET_HANDLE_SEPARATION_POS;
     let targetMin = startHandleValue - TARGET_START_HANDLE_POS * idealWidth;
     let targetMax = targetMin + idealWidth;
@@ -225,7 +231,11 @@ function adjustRangeGradually() { // Adjusts slider range
         let newMax = currentMax + stepMax;
         newMin = Math.max(minTimestamp, newMin);
         newMax = Math.min(maxTimestamp, newMax);
-        if (newMax < newMin + MIN_RANGE_WIDTH_MS) return true;
+        if (newMax < newMin + MIN_RANGE_WIDTH_MS) {
+             if (newMin === minTimestamp) newMax = Math.min(minTimestamp + MIN_RANGE_WIDTH_MS, maxTimestamp);
+             else newMin = Math.max(newMax - MIN_RANGE_WIDTH_MS, minTimestamp);
+             if (newMax < newMin + MIN_RANGE_WIDTH_MS) return true;
+        }
         const changeThreshold = 1;
         let updateNeeded = false;
         let rangeToUpdate = { min: currentMin, max: currentMax };
@@ -241,41 +251,50 @@ function adjustRangeGradually() { // Adjusts slider range
     return true;
 }
 
+
 // --- Slider Setup ---
-function setupDateSlider() { // Sets up noUiSlider and event listeners
-    // ... (This function remains unchanged - includes debounced updateMap trigger) ...
-    if (allFeatures.length === 0) return;
+// (This function remains largely unchanged, ensure error handling is robust)
+function setupDateSlider() {
+    if (allFeatures.length === 0) { console.log("No features, cannot setup slider."); return; }
+    if (typeof minTimestamp !== 'number' || typeof maxTimestamp !== 'number' || isNaN(minTimestamp) || isNaN(maxTimestamp)) { console.error("Invalid min/max timestamps for slider setup."); document.getElementById('filterStatus').textContent = "Error: Invalid date range."; return; }
+    if (minTimestamp >= maxTimestamp) {
+        console.error(`Slider setup error: minTimestamp (${minTimestamp}) must be less than maxTimestamp (${maxTimestamp}).`);
+         if (minTimestamp === maxTimestamp) { maxTimestamp = minTimestamp + MIN_RANGE_WIDTH_MS; console.warn("Corrected equal min/max timestamps for slider."); }
+         else { document.getElementById('filterStatus').textContent = "Error: Invalid date range."; return; }
+    }
+
     const sliderElement = document.getElementById('date-slider');
     const startDateLabel = document.getElementById('slider-start-date');
     const endDateLabel = document.getElementById('slider-end-date');
-    if (dateSlider && dateSlider.destroy) { stopAdjustmentLoop(); dateSlider.destroy(); dateSlider = null; }
+    if (!sliderElement || !startDateLabel || !endDateLabel) { console.error("Slider UI elements not found."); return; }
 
-    dateSlider = noUiSlider.create(sliderElement, {
-        start: [minTimestamp, maxTimestamp], connect: true, range: { 'min': minTimestamp, 'max': maxTimestamp },
-        tooltips: false, format: { to: value => Math.round(value), from: value => Number(value) }, behaviour: 'drag'
-    });
+    if (dateSlider && typeof dateSlider.destroy === 'function') { stopAdjustmentLoop(); dateSlider.destroy(); dateSlider = null; console.log("Existing slider destroyed."); }
 
-    dateSlider.on('update', function (values, handle) {
-        if (!dateSlider) return;
-        startDateLabel.textContent = formatDateForDisplay(values[0]);
-        endDateLabel.textContent = formatDateForDisplay(values[1]);
-    });
-    dateSlider.on('start', function (values, handle) { activeHandleIndex = handle; startAdjustmentLoop(); });
-    dateSlider.on('slide', function (values, handle) { activeHandleIndex = handle; startAdjustmentLoop(); });
+    console.log(`Setting up slider with range: ${minTimestamp} to ${maxTimestamp}`);
+    try {
+        dateSlider = noUiSlider.create(sliderElement, {
+            start: [minTimestamp, maxTimestamp], connect: true, range: { 'min': minTimestamp, 'max': maxTimestamp },
+            tooltips: false, format: { to: value => Math.round(value), from: value => Number(value) }, behaviour: 'drag'
+        });
 
-    const debouncedUpdate = debounce(updateMap, UPDATE_MAP_DEBOUNCE_MS);
-    const finalUpdateHandler = (values, handle) => { if (!dateSlider) return; activeHandleIndex = null; debouncedUpdate(); startAdjustmentLoop(); };
-    dateSlider.on('end', finalUpdateHandler);
-    dateSlider.on('set', finalUpdateHandler);
+        dateSlider.on('update', function (values, handle) { if (!dateSlider) return; startDateLabel.textContent = formatDateForDisplay(Number(values[0])); endDateLabel.textContent = formatDateForDisplay(Number(values[1])); });
+        dateSlider.on('start', function (values, handle) { activeHandleIndex = handle; startAdjustmentLoop(); });
 
-    console.log("Date slider initialized.");
-    updateRangeDisplay();
-    updateMap(); // Initial map draw
+        const debouncedUpdate = debounce(updateMap, UPDATE_MAP_DEBOUNCE_MS);
+        dateSlider.on('slide', function (values, handle) { activeHandleIndex = handle; startAdjustmentLoop(); debouncedUpdate(); });
+
+        const finalUpdateHandler = (values, handle) => { if (!dateSlider) return; activeHandleIndex = null; updateMap(); startAdjustmentLoop(); };
+        dateSlider.on('end', finalUpdateHandler);
+        dateSlider.on('set', finalUpdateHandler);
+
+        console.log("Date slider initialized successfully.");
+        updateRangeDisplay();
+        updateMap();
+    } catch (error) { console.error("Error creating noUiSlider:", error); statusDiv.textContent = "Error initializing slider."; }
 }
 
 // --- Debounce Function ---
-function debounce(func, wait) { // Utility for delaying function execution
-    // ... (This function remains unchanged) ...
+function debounce(func, wait) {
     let timeout;
     return function executedFunction(...args) {
         const later = () => { clearTimeout(timeout); func(...args); };
@@ -284,72 +303,149 @@ function debounce(func, wait) { // Utility for delaying function execution
     };
 }
 
+// --- Binary Search Helper Functions ---
+// (These functions remain unchanged)
+function findFirstFeatureIndex(targetTimestamp) {
+    let low = 0; let high = allFeatures.length - 1; let index = allFeatures.length;
+    while (low <= high) { const mid = Math.floor((low + high) / 2); if (allFeatures[mid].properties.timestampMs >= targetTimestamp) { index = mid; high = mid - 1; } else { low = mid + 1; } }
+    return index;
+}
+function findLastFeatureIndex(targetTimestamp) {
+    let low = 0; let high = allFeatures.length - 1; let index = -1;
+    while (low <= high) { const mid = Math.floor((low + high) / 2); if (allFeatures[mid].properties.timestampMs <= targetTimestamp) { index = mid; low = mid + 1; } else { high = mid - 1; } }
+    return index;
+}
+
+
 // --- Map Update Logic ---
-function updateMap() { // Filters data and redraws map layers
-    // ... (This function remains unchanged - uses pre-calculated segmentWeight) ...
-    console.log("updateMap called");
+function updateMap() {
+    console.time("updateMap Total"); // Time the entire function
     const statusDiv = document.getElementById('filterStatus');
-    if (!dateSlider || !segmentLayerGroup) { statusDiv.textContent = "Waiting..."; return; }
+    if (!dateSlider || !segmentLayerGroup || allFeatures.length === 0) {
+        statusDiv.textContent = "Waiting for data/slider...";
+        clearMapLayers();
+        console.timeEnd("updateMap Total");
+        return;
+    }
 
-    const sliderValues = dateSlider.get();
-    const startTimestamp = sliderValues[0]; const endTimestamp = sliderValues[1];
-    const startDateStr = formatDateForDisplay(startTimestamp); const endDateStr = formatDateForDisplay(endTimestamp);
+    console.time("updateMap: Get Slider Values");
+    const sliderValues = dateSlider.get().map(Number);
+    const startTimestamp = sliderValues[0];
+    const endTimestamp = sliderValues[1];
+    const startDateStr = formatDateForDisplay(startTimestamp);
+    const endDateStr = formatDateForDisplay(endTimestamp);
     statusDiv.textContent = `Filtering data...`;
+    console.timeEnd("updateMap: Get Slider Values");
 
-    const filteredFeatures = allFeatures.filter(feature => { const ft = feature.properties.dateObj.getTime(); return ft >= startTimestamp && ft <= endTimestamp; });
 
+    console.time("updateMap: Filter Features (Binary Search + Slice)");
+    const startIndex = findFirstFeatureIndex(startTimestamp);
+    const endIndex = findLastFeatureIndex(endTimestamp);
+    let filteredFeatures = [];
+    if (startIndex <= endIndex && startIndex < allFeatures.length && endIndex >= 0) {
+        filteredFeatures = allFeatures.slice(startIndex, endIndex + 1);
+    }
+    console.timeEnd("updateMap: Filter Features (Binary Search + Slice)");
+    console.log(`updateMap: Found ${filteredFeatures.length} features between index ${startIndex} and ${endIndex}.`); // Log count immediately
+
+    console.time("updateMap: Clear Layers");
     clearMapLayers();
+    console.timeEnd("updateMap: Clear Layers");
 
     if (filteredFeatures.length > 0) {
-        if (filteredFeatures.length > 1) {
-            const layersToAdd = [];
-            for (let i = 0; i < filteredFeatures.length - 1; i++) {
-                const p1 = filteredFeatures[i]; const p2 = filteredFeatures[i + 1];
-                const weight = p1.properties.segmentWeight; // Use pre-calculated weight
-                if (p2.properties.dateObj.getTime() > p1.properties.dateObj.getTime()) {
-                    const segmentCoords = [[p1.properties.lat, p1.properties.lon], [p2.properties.lat, p2.properties.lon]];
-                    layersToAdd.push(L.polyline(segmentCoords, { color: SEGMENT_COLOR, weight: weight, opacity: SEGMENT_OPACITY }));
-                }
-            }
-            layersToAdd.forEach(layer => segmentLayerGroup.addLayer(layer));
-        }
 
-        const startPoint = filteredFeatures[0]; const endPoint = filteredFeatures[filteredFeatures.length - 1];
+        console.time("updateMap: Create/Add Segments");
+        if (filteredFeatures.length > 1) {
+            const layersToAdd = []; // Create temp array first
+            for (let i = 0; i < filteredFeatures.length - 1; i++) {
+                const p1 = filteredFeatures[i];
+                const p2 = filteredFeatures[i + 1];
+                const weight = p1.properties.segmentWeight; // Use pre-calculated weight
+
+                 if (p2.properties.timestampMs > p1.properties.timestampMs) {
+                    const segmentCoords = [ [p1.properties.lat, p1.properties.lon], [p2.properties.lat, p2.properties.lon] ];
+                    // --- Create Polyline Object ---
+                    // console.time("updateMap: Create Single Polyline"); // Too verbose usually
+                    const polyline = L.polyline(segmentCoords, { color: SEGMENT_COLOR, weight: weight, opacity: SEGMENT_OPACITY });
+                    // console.timeEnd("updateMap: Create Single Polyline");
+                    layersToAdd.push(polyline);
+                 }
+            }
+            // --- Add Layers in Bulk (might be slightly faster for FeatureGroup) ---
+            console.time("updateMap: Add Polylines to Group");
+            layersToAdd.forEach(layer => segmentLayerGroup.addLayer(layer));
+            // Alternative (try if above is slow, though often similar for FeatureGroup):
+            // segmentLayerGroup.addLayer(L.layerGroup(layersToAdd));
+            console.timeEnd("updateMap: Add Polylines to Group");
+        }
+        console.timeEnd("updateMap: Create/Add Segments"); // Ends timing for segment processing
+
+
+        console.time("updateMap: Create Markers & Popups");
+        const startPoint = filteredFeatures[0];
+        const endPoint = filteredFeatures[filteredFeatures.length - 1];
         const greenIcon = L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] });
         const redIcon = L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] });
 
         currentStartMarker = L.marker([startPoint.properties.lat, startPoint.properties.lon], { icon: greenIcon }).addTo(map);
+        const startPopupContent = `<b>Start:</b><br>${formatDateForDisplay(startPoint.properties.dateObj)}<br>${startPoint.properties.dateObj.toLocaleTimeString()}`;
 
-        if (filteredFeatures.length > 1 && startPoint.properties.dateObj.getTime() !== endPoint.properties.dateObj.getTime()) {
-            currentEndMarker = L.marker([endPoint.properties.lat, endPoint.properties.lon], { icon: redIcon })
-                .bindPopup(`<b>End:</b><br>${formatDateForDisplay(endPoint.properties.dateObj)}<br>${endPoint.properties.dateObj.toLocaleTimeString()}`).addTo(map);
-            currentStartMarker.bindPopup(`<b>Start:</b><br>${formatDateForDisplay(startPoint.properties.dateObj)}<br>${startPoint.properties.dateObj.toLocaleTimeString()}`);
+        if (filteredFeatures.length > 1 && startPoint.properties.timestampMs !== endPoint.properties.timestampMs) {
+             const endPopupContent = `<b>End:</b><br>${formatDateForDisplay(endPoint.properties.dateObj)}<br>${endPoint.properties.dateObj.toLocaleTimeString()}`;
+             currentEndMarker = L.marker([endPoint.properties.lat, endPoint.properties.lon], { icon: redIcon })
+                .bindPopup(endPopupContent)
+                .addTo(map);
+            currentStartMarker.bindPopup(startPopupContent);
         } else if (filteredFeatures.length === 1) {
             currentStartMarker.bindPopup(`<b>Single Point:</b><br>${formatDateForDisplay(startPoint.properties.dateObj)}<br>${startPoint.properties.dateObj.toLocaleTimeString()}`);
         } else {
              currentStartMarker.bindPopup(`<b>Start/End:</b><br>${formatDateForDisplay(startPoint.properties.dateObj)}<br>${startPoint.properties.dateObj.toLocaleTimeString()}`);
         }
+        console.timeEnd("updateMap: Create Markers & Popups");
 
+
+        console.time("updateMap: Fit Bounds");
         try {
              let boundsToFit = null;
-             if (segmentLayerGroup.getLayers().length > 0) boundsToFit = segmentLayerGroup.getBounds();
-             else if (currentStartMarker) boundsToFit = L.latLngBounds(currentStartMarker.getLatLng(), currentStartMarker.getLatLng()).pad(0.1);
-             if (boundsToFit?.isValid()) map.flyToBounds(boundsToFit, { padding: [50, 50] });
-         } catch (e) { console.warn("Could not fit bounds:", e); }
+             console.time("updateMap: Calculate Bounds");
+             if (segmentLayerGroup && segmentLayerGroup.getLayers().length > 0) {
+                 boundsToFit = segmentLayerGroup.getBounds();
+             } else if (currentStartMarker) {
+                 boundsToFit = L.latLngBounds(currentStartMarker.getLatLng(), currentStartMarker.getLatLng());
+             }
+             console.timeEnd("updateMap: Calculate Bounds");
+
+             if (boundsToFit && boundsToFit.isValid()) {
+                 console.time("updateMap: Fly To Bounds Call");
+                 map.flyToBounds(boundsToFit, { padding: [50, 50], maxZoom: 16, duration: 0.5 }); // Optional: slightly reduce animation duration
+                 console.timeEnd("updateMap: Fly To Bounds Call");
+             } else if (filteredFeatures.length > 0) {
+                  map.setView([startPoint.properties.lat, startPoint.properties.lon], map.getZoom());
+             }
+         } catch (e) {
+             console.warn("Could not calculate or fit bounds:", e);
+             if (startPoint) map.setView([startPoint.properties.lat, startPoint.properties.lon], map.getZoom());
+         }
+        console.timeEnd("updateMap: Fit Bounds");
 
         statusDiv.textContent = `Showing ${filteredFeatures.length} points from ${startDateStr} to ${endDateStr}.`;
+
     } else {
+        // No features found
         statusDiv.textContent = `No data found between ${startDateStr} and ${endDateStr}.`;
     }
+    console.timeEnd("updateMap Total"); // End timing the entire function
 }
 
 
 // --- Clear Map Layers ---
-function clearMapLayers() { // Removes segments and markers
-    // ... (This function remains unchanged) ...
+function clearMapLayers() {
+    // This is usually fast, but let's time it just in case
+    // console.time("clearMapLayers Internal");
     segmentLayerGroup?.clearLayers();
     if (currentStartMarker) { map.removeLayer(currentStartMarker); currentStartMarker = null; }
     if (currentEndMarker) { map.removeLayer(currentEndMarker); currentEndMarker = null; }
+    // console.timeEnd("clearMapLayers Internal");
 }
 
 
